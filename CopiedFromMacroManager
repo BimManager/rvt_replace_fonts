@@ -1,3 +1,39 @@
+[Autodesk.Revit.Attributes.Transaction(Autodesk.Revit.Attributes.TransactionMode.Manual)]
+	[Autodesk.Revit.DB.Macros.AddInId("B4A7691C-A01D-4CDE-BEA5-0B58DF332541")]
+	public partial class ThisApplication
+	{
+		static EventLog log=new EventLog
+		{
+			Log="Application",
+			Source="Application"
+		};
+		EventLogTraceListener eventLogTraceListener=
+			new EventLogTraceListener(log);
+		TraceSwitch generalSwitch=
+			new TraceSwitch("General", "Entire macro");
+		
+		
+		private void Module_Startup(object sender, EventArgs e)
+		{
+
+		}
+
+		private void Module_Shutdown(object sender, EventArgs e)
+		{
+
+		}
+
+		#region Revit Macros generated code
+		private void InternalStartup()
+		{
+			this.Startup += new System.EventHandler(Module_Startup);
+			this.Shutdown += new System.EventHandler(Module_Shutdown);
+		}
+		#endregion
+		
+		
+		
+		
 		public void ChangeTextNotesFont()
 		{
 			generalSwitch.Level=TraceLevel.Verbose;
@@ -12,7 +48,7 @@
 			{
 				// Unearth(Discover/Detect) all TextNotes in the document.
 				IList<TextElementType> textNoteTypes=
-					FindTextElementTypes(doc);
+					GetTextElementTypes(doc);
 				
 				Trace.WriteLineIf(generalSwitch.TraceInfo, string.Format(
 					"textNoteTypes.Count={0}", textNoteTypes.Count));
@@ -60,23 +96,33 @@
 			string newFontName="GOST Common";
 			try
 			{
+				// get hold of all annotation families in the document
 				IList<Family> families=GetAnnotationFamilies(doc);
 				
+				// log some information about the finding
 				Trace.WriteLineIf(generalSwitch.TraceInfo, string.Format(
 					"families.Count={0}", families.Count));
 				
 				StringBuilder strBld=new StringBuilder();
 				
+				// iterate over the family collection
 				foreach(Family family in families)
 				{
 					strBld.AppendLine(family.Name);
 					
+					// get control of a family document
 					Document familyDoc=doc.EditFamily(family);
+					
 					using(Transaction t=new Transaction(familyDoc, "Change fonts in family"))
 					{
+						
 						t.Start();
+						FailureHandlingOptions failOpt=t.GetFailureHandlingOptions();
+						failOpt.SetFailuresPreprocessor(new GroupWarningSwallower());
+						t.SetFailureHandlingOptions(failOpt);
+						// unearth all TextElementTypes
 						IList<TextElementType> textElementTypes=
-							FindTextElementTypes(familyDoc);
+							GetTextElementTypes(familyDoc);
 						
 						if(textElementTypes.Count==0)
 						{
@@ -86,11 +132,16 @@
 						
 						foreach(TextElementType textType in textElementTypes)
 						{
+							// Generate a new TextElementType with the new font;
+							// discover all elements of the existing type,
+							// set your type property to the new TextElementType
+							// discrading their previous type
 							CreateNewTextElemType(textType, newFontName, familyDoc);
 						}
 						t.Commit();
 					}
 					
+					// Load the modified family back into the document
 					familyDoc.LoadFamily(doc, new SimpleFamilyLoadOptions());
 				}
 				
@@ -161,34 +212,86 @@
 			}
 		}
 		
+		public void SelectFamilyForFontModification()
+		{
+			generalSwitch.Level=TraceLevel.Verbose;
+			// Get the hold of the active document
+			Document doc=this.ActiveUIDocument.Document;
+			Selection sel=this.ActiveUIDocument.Selection;
+			
+			// Add the EventLogTraceListener
+			Trace.Listeners.Add(eventLogTraceListener);
+			
+			string newFontName="GOST Common";
+
+			try
+			{
+				FamilyInstance famInst=doc.GetElement(sel.PickObject
+				                                      (ObjectType.Element,"Please select a FamilyInstance"))
+					as FamilyInstance;
+				
+				Family selectedFamily=famInst.Symbol.Family;
+				
+				Document familyDoc=doc.EditFamily(selectedFamily);
+				
+				
+				using(Transaction t=new Transaction(familyDoc, "Change fonts in family"))
+				{
+					t.Start();
+					FailureHandlingOptions failOpt=t.GetFailureHandlingOptions();
+					failOpt.SetFailuresPreprocessor(new GroupWarningSwallower());
+					t.SetFailureHandlingOptions(failOpt);
+					// unearth all TextElementTypes
+					IList<TextElementType> textElementTypes=
+						GetTextElementTypes(familyDoc);
+					
+					TaskDialog.Show("Info", string.Format("textElementTypes.Count={0}",
+					                                      textElementTypes.Count));
+					
+					if(textElementTypes.Count==0)
+					{
+						familyDoc.Close(false);
+					}
+					
+					foreach(TextElementType textType in textElementTypes)
+					{
+						// Generate a new TextElementType with the new font;
+						// discover all elements of the existing type,
+						// set your type property to the new TextElementType
+						// discrading their previous type
+						CreateNewTextElemType(textType, newFontName, familyDoc);
+					}
+					t.Commit();
+				}
+				
+				if(GetAnnotationFamilies(familyDoc).Count!=0)
+				{
+					ModifyFamilyFonts(familyDoc, newFontName);
+				}
+				
+				familyDoc.LoadFamily(doc, new SimpleFamilyLoadOptions());
+				
+			}
+			catch(Autodesk.Revit.Exceptions.OperationCanceledException)
+			{
+			}
+			catch(Exception ex)
+			{
+				Trace.WriteLineIf(generalSwitch.TraceError,string.Format("StackTrace:\n{0}\nMessage:\n{1}",
+				                                                         ex.StackTrace, ex.Message));
+
+				TaskDialog.Show("Exception",string.Format("StackTrace:\n{0}\nMessage:\n{1}",
+				                                          ex.StackTrace, ex.Message));
+			}
+			finally
+			{
+				Trace.Flush();
+				Trace.Close();
+			}
+		}
 		
 		#region Helper Methods
-		private static IList<TextNoteType> FindTextNoteTypes(Document doc)
-		{
-			return
-				new FilteredElementCollector(doc)
-				.OfClass(typeof(TextNoteType))
-				.Cast<TextNoteType>()
-				.ToList();
-		}
-		
-		private static IList<TextNote> TextNotesOfType(Document doc, string typeName)
-		{
-			ElementParameterFilter typeNameFilter=
-				new ElementParameterFilter(ParameterFilterRuleFactory.CreateEqualsRule(
-					new ElementId(BuiltInParameter.ALL_MODEL_TYPE_NAME), typeName, true));
-			
-			IList<TextNote> textNotes=
-				new FilteredElementCollector(doc)
-				.OfClass(typeof(TextNote))
-				.WherePasses(typeNameFilter)
-				.Cast<TextNote>()
-				.ToList();
-			
-			return textNotes;
-		}
-		
-		private static IList<TextElementType> FindTextElementTypes(Document doc)
+		private static IList<TextElementType> GetTextElementTypes(Document doc)
 		{
 			return
 				new FilteredElementCollector(doc)
@@ -225,40 +328,12 @@
 				.ToList();
 		}
 		
-		private static IList<Element> TextElemNoteOfType(Document doc, string typeName)
-		{
-			ElementParameterFilter typeNameFilter=
-				new ElementParameterFilter(ParameterFilterRuleFactory.CreateEqualsRule(
-					new ElementId(BuiltInParameter.ALL_MODEL_TYPE_NAME), typeName, true));
-			
-			ElementClassFilter textNotes=new ElementClassFilter(typeof(TextNote));
-			ElementClassFilter textElements=new ElementClassFilter(typeof(TextElement));
-			LogicalAndFilter textElementsAndNotes=
-				new LogicalAndFilter(textNotes, textElements);
-			
-			return
-				new FilteredElementCollector(doc)
-				.WherePasses(textElementsAndNotes)
-				.WherePasses(typeNameFilter)
-				.WhereElementIsNotElementType()
-				.ToList();
-		}
-		
 		private static IList<DimensionType> GetDimensionTypes(Document doc)
 		{
 			return
 				new FilteredElementCollector(doc)
 				.OfClass(typeof(DimensionType))
 				.Cast<DimensionType>()
-				.ToList();
-		}
-		
-		private static IList<Dimension> GetDimensions(Document doc)
-		{
-			return
-				new FilteredElementCollector(doc)
-				.OfClass(typeof(Dimension))
-				.Cast<Dimension>()
 				.ToList();
 		}
 		
@@ -273,31 +348,191 @@
 				 select family).ToList();
 		}
 		
-		
-		
-		private static void CreateNewTextElemType(ElementType existingType, string newFontName, Document familyDoc)
+		private static string TextElementTypeNameGenerator(TextElementType textElemType, string fontName)
 		{
+			Color color=ConvertIntToColor(textElemType.LookupParameter("Color").AsInteger());
+			string colorAsString=string.Format("({0},{1},{2})",color.Red, color.Green, color.Blue);
+			
+			string pattern=@"[\d]+.[\d]{1}";
+			
+			return string.Format("{0}({1})-{2}{3}{4}{5}-{6}",
+			                     Regex.Match(textElemType.LookupParameter("Text Size").AsValueString(), pattern).Value,
+			                     textElemType.LookupParameter("Width Factor").AsValueString(), fontName,
+			                     textElemType.LookupParameter("Underline").AsInteger()==1?"-U":"",
+			                     textElemType.LookupParameter("Bold").AsInteger()==1?"-B":"",
+			                     textElemType.LookupParameter("Italic").AsInteger()==1?"-I":"",
+			                     colorAsString);
+		}
+		
+		private static Color ConvertIntToColor(int rgb)
+		{
+			byte[] bArr=BitConverter.GetBytes(rgb);
+			if(BitConverter.IsLittleEndian)
+				return new Color(bArr[0],bArr[1],bArr[2]);
+			else
+				return new Color(bArr[1],bArr[2],bArr[3]);
+		}
+		
+		private static void CreateNewTextElemType
+			(TextElementType extTextElemType, string newFontName, Document familyDoc)
+		{
+			
 			// Get the current type's properties.
-			string extFontName=existingType
+			string extFontName=extTextElemType
 				.LookupParameter("Text Font").AsString();
-			string extTypeFontSize=existingType
+			string extTypeFontSize=extTextElemType
 				.LookupParameter("Text Size").AsValueString();
-			string extTypeName=existingType
+			string extTypeName=extTextElemType
 				.get_Parameter(BuiltInParameter.ALL_MODEL_TYPE_NAME).AsString();
 			
 			// Generate a new type name.
-			string newTypeName=extTypeFontSize + "-" + newFontName;
+			string newTypeName=TextElementTypeNameGenerator(extTextElemType, newFontName);
+			
+			// Ensure that the new type name is unique
+			// and duplicate the current type.
+			TextElementType newTextElemType=null;
+			TextNoteType newTextNoteType=null;
+			
+			try
+			{
+				if(extTextElemType is TextNoteType)
+				{
+					newTextNoteType=extTextElemType.Duplicate(newTypeName) as TextNoteType;
+					newTextNoteType.LookupParameter("Text Font").Set(newFontName);
+				}
+				else
+				{
+					newTextElemType=extTextElemType.Duplicate(newTypeName) as TextElementType;
+					newTextElemType.LookupParameter("Text Font").Set(newFontName);
+				}
+			}
+			catch(Autodesk.Revit.Exceptions.ArgumentException)
+			{
+				IList<TextElementType> textElemTypes=GetTextElementTypes(familyDoc);
+				
+				
+				if(extTextElemType is TextNoteType)
+				{
+					newTextNoteType=textElemTypes
+						.Where<TextElementType>(t=>t.Name==newTypeName)
+						.First() as TextNoteType;
+				}
+				else
+					newTextElemType=textElemTypes
+						.Where<TextElementType>(t=>t.Name==newTypeName).First();
+				
+			}
+			
+			// Discover all element of the existing type and change their type
+			// to the new one.
+			foreach(TextElement textElem in TextElementOfType(familyDoc, extTypeName))
+			{
+				if(newTextNoteType!=null && textElem is TextNote)
+					textElem.get_Parameter(BuiltInParameter.ELEM_TYPE_PARAM).Set(newTextNoteType.Id);
+				else if(newTextElemType!=null && !(textElem is TextNote))
+					textElem.get_Parameter(BuiltInParameter.ELEM_TYPE_PARAM).Set(newTextElemType.Id);
+				else
+					continue;
+			}
+			
+			// Discard the existing type.
+			familyDoc.Delete(extTextElemType.Id);
+		}
+		
+		public static void ModifyFamilyFonts(Document doc, string newFontName)
+		{
+			
+			// get hold of all annotation families in the document
+			IList<Family> families=GetAnnotationFamilies(doc);
+			
+			// iterate over the family collection
+			foreach(Family family in families)
+			{
+				if(family.Name.Length==0)
+					continue;
+				// get control of a family document
+				Document familyDoc=doc.EditFamily(family);
+				
+				using(Transaction t=new Transaction(familyDoc, "Change fonts in family"))
+				{
+					
+					t.Start();
+					// handle warnings related to editing groups.
+					FailureHandlingOptions failOpt=t.GetFailureHandlingOptions();
+					failOpt.SetFailuresPreprocessor(new GroupWarningSwallower());
+					t.SetFailureHandlingOptions(failOpt);
+					
+					// unearth all TextElementTypes
+					IList<TextElementType> textElementTypes=
+						GetTextElementTypes(familyDoc);
+					
+					if(textElementTypes.Count==0)
+					{
+						familyDoc.Close(false);
+						continue;
+					}
+					
+					foreach(TextElementType textType in textElementTypes)
+					{
+						// Generate a new TextElementType with the new font;
+						// discover all elements of the existing type,
+						// set your type property to the new TextElementType
+						// discrading their previous type
+						CreateNewTextElemType(textType, newFontName, familyDoc);
+					}
+					t.Commit();
+				}
+				
+				if(GetAnnotationFamilies(familyDoc).Count!=0)
+				{
+					ModifyFamilyFonts(familyDoc, newFontName);
+				}
+				
+				// Load the modified family back into the document
+				familyDoc.LoadFamily(doc, new SimpleFamilyLoadOptions());
+			}
+		}
+		
+		private static string DimensionTypeNameGenerator(DimensionType dimType, string fontName)
+		{
+			Color color=ConvertIntToColor(dimType.LookupParameter("Color").AsInteger());
+			string colorAsString=string.Format("({0},{1},{2})",color.Red, color.Green, color.Blue);
+			
+			string pattern=@"[\d]+.[\d]{1}";
+			
+			return string.Format("{0}-{1}({2})-{3}{4}{5}{6}-{7}",
+			                     dimType.get_Parameter(BuiltInParameter.ALL_MODEL_FAMILY_NAME).AsString().Split(' ')[0],
+			                     Regex.Match(dimType.LookupParameter("Text Size").AsValueString(), pattern).Value,
+			                     dimType.LookupParameter("Width Factor").AsValueString(), fontName,
+			                     dimType.LookupParameter("Underline").AsInteger()==1?"-U":"",
+			                     dimType.LookupParameter("Bold").AsInteger()==1?"-B":"",
+			                     dimType.LookupParameter("Italic").AsInteger()==1?"-I":"",
+			                     colorAsString);
+		}
+		
+		private static void CreateNewDimType(DimensionType extType, string newFontName, Document doc)
+		{
+			string extTypeName=extType
+				.get_Parameter(BuiltInParameter.ALL_MODEL_TYPE_NAME).AsString();
+			
+			if(extTypeName.Length==0)
+				return;
+			
+			// Generate a new type name.
+			string newTypeName=DimensionTypeNameGenerator(extType, newFontName);
 			
 			// Ensure that the new type name is unique
 			// and duplicate the current type.
 			ElementType newType=null;
 			try
 			{
-				newType=existingType.Duplicate(newTypeName);
+				newType=extType.Duplicate(newTypeName);
 			}
 			catch(Autodesk.Revit.Exceptions.ArgumentException)
 			{
-				return;
+				IList<DimensionType> textDimTypes=GetDimensionTypes(doc);
+				
+				newType=textDimTypes.Where<DimensionType>( t=>(t.Name==newTypeName)).First();
 			}
 			
 			// Change the font of the new type
@@ -305,101 +540,71 @@
 			
 			// Discover all element of the existing type and change their type
 			// to the new one.
-			
-			foreach(Element elem in TextElementOfType(familyDoc, extTypeName))
+			foreach(Element elem in DimensionOfType(doc, extTypeName))
 			{
 				elem.get_Parameter(BuiltInParameter.ELEM_TYPE_PARAM).Set(newType.Id);
 			}
 			
 			// Discard the existing type.
-			familyDoc.Delete(existingType.Id);
-		}
-		
-		private static void CreateNewDimType(DimensionType existingType, string newFontName, Document familyDoc)
-		{
-			try
-			{
-				// Get the current type's properties.
-				string extFontName=existingType
-					.LookupParameter("Text Font").AsString();
-				string extTypeFontSize=existingType
-					.LookupParameter("Text Size").AsValueString();
-				string extFamilyName=existingType
-					.get_Parameter(BuiltInParameter.ALL_MODEL_FAMILY_NAME).AsString();
-				extFamilyName=extFamilyName.Split(' ')[0];
-				string extTypeName=existingType
-					.get_Parameter(BuiltInParameter.ALL_MODEL_TYPE_NAME).AsString();
-				
-				// Generate a new type name.
-				string newTypeName=
-					extTypeName.Replace(extFontName, newFontName);
-				
-				// Ensure that the new type name is unique
-				// and duplicate the current type.
-				ElementType newType=null;
-				try
-				{
-					newType=existingType.Duplicate(newTypeName);
-				}
-				catch(Autodesk.Revit.Exceptions.ArgumentException)
-				{
-					return;
-				}
-				
-				// Change the font of the new type
-				newType.LookupParameter("Text Font").Set(newFontName);
-				
-				// Discover all element of the existing type and change their type
-				// to the new one.
-				
-				foreach(Element elem in DimensionOfType(familyDoc, extTypeName))
-				{
-					elem.get_Parameter(BuiltInParameter.ELEM_TYPE_PARAM).Set(newType.Id);
-				}
-				
-				// Discard the existing type.
-				familyDoc.Delete(existingType.Id);
-			}
-			catch(Exception ex)
-			{
-				//familyDoc.Delete(existingType.Id);
-				return;
-			}
+			doc.Delete(extType.Id);
 		}
 	}
 	
 	#endregion
-}
-
-internal class SimpleFamilyLoadOptions: IFamilyLoadOptions
-{
-	public bool OnFamilyFound(bool familyInUse, out bool overwriteParameterValues)
-	{
-		if(!familyInUse)
-		{
-			overwriteParameterValues=true;
-			return true;
-		}
-		else
-		{
-			overwriteParameterValues=true;
-			return true;
-		}
-	}
 	
-	public bool OnSharedFamilyFound(Family sharedFamily, bool familyInUse, out FamilySource source, out bool overwriteParameterValues)
+	
+	internal class SimpleFamilyLoadOptions: IFamilyLoadOptions
 	{
-		if(!familyInUse)
+		public bool OnFamilyFound(bool familyInUse, out bool overwriteParameterValues)
 		{
-			source=FamilySource.Family;
-			overwriteParameterValues=true;
-			return true;
+			if(!familyInUse)
+			{
+				overwriteParameterValues=true;
+				return true;
+			}
+			else
+			{
+				overwriteParameterValues=true;
+				return true;
+			}
 		}
-		else
+		
+		public bool OnSharedFamilyFound(Family sharedFamily, bool familyInUse, out FamilySource source, out bool overwriteParameterValues)
 		{
-			source=FamilySource.Family;
-			overwriteParameterValues=true;
-			return true;
+			if(!familyInUse)
+			{
+				source=FamilySource.Family;
+				overwriteParameterValues=true;
+				return true;
+			}
+			else
+			{
+				source=FamilySource.Family;
+				overwriteParameterValues=true;
+				return true;
+			}
 		}
 	}
-}
+
+	internal class GroupWarningSwallower: IFailuresPreprocessor
+	{
+		
+		
+		public FailureProcessingResult PreprocessFailures(FailuresAccessor failuresAccessor)
+		{
+			IList<FailureMessageAccessor> failList=new List<FailureMessageAccessor>();
+			// Inside event handler, get all warnings
+			failList=failuresAccessor.GetFailureMessages(FailureSeverity.Warning);
+			foreach(FailureMessageAccessor failure in failList)
+			{
+				// Check FailureDefinitionIds against ones that you want to dismiss
+				FailureDefinitionId failId=failure.GetFailureDefinitionId();
+				if(failId==BuiltInFailures.GroupFailures.AtomViolationWhenOnePlaceInstance)
+				{
+					failuresAccessor.DeleteWarning(failure);
+				}
+			}
+			
+			return FailureProcessingResult.Continue;
+		}
+	}
